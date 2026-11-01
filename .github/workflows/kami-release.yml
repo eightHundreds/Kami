@@ -1,0 +1,141 @@
+name: Kami release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kami-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'eightHundreds/Kami'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check signing key
+        id: signing
+        env:
+          KAMI_KEYSTORE: ${{ secrets.KAMI_SIGNING_KEYSTORE_BASE64 }}
+          KAMI_STORE_PASSWORD: ${{ secrets.KAMI_SIGNING_STORE_PASSWORD }}
+          KAMI_KEY_ALIAS: ${{ secrets.KAMI_SIGNING_KEY_ALIAS }}
+          KAMI_KEY_PASSWORD: ${{ secrets.KAMI_SIGNING_KEY_PASSWORD }}
+        run: |
+          if [[ -z "$KAMI_KEYSTORE" || -z "$KAMI_STORE_PASSWORD" || -z "$KAMI_KEY_ALIAS" || -z "$KAMI_KEY_PASSWORD" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Release skipped
+          Configure the four KAMI_SIGNING_* repository secrets before signed releases can be built.
+          EOF
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out source
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Apply Kami identity and release version
+        if: steps.signing.outputs.configured == 'true'
+        id: prepare
+        run: python3 scripts/kami/prepare_release.py
+
+      - name: Build release APKs
+        if: steps.signing.outputs.configured == 'true'
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Sign and verify APKs
+        if: steps.signing.outputs.configured == 'true'
+        env:
+          KAMI_KEYSTORE: ${{ secrets.KAMI_SIGNING_KEYSTORE_BASE64 }}
+          KAMI_STORE_PASSWORD: ${{ secrets.KAMI_SIGNING_STORE_PASSWORD }}
+          KAMI_KEY_ALIAS: ${{ secrets.KAMI_SIGNING_KEY_ALIAS }}
+          KAMI_KEY_PASSWORD: ${{ secrets.KAMI_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYSTORE_PATH="$RUNNER_TEMP/kami-release.jks"
+          ASSET_DIR="$RUNNER_TEMP/kami-release-assets"
+          mkdir -p "$ASSET_DIR"
+          trap 'rm -f "$KEYSTORE_PATH"' EXIT
+          printf '%s' "$KAMI_KEYSTORE" | base64 --decode > "$KEYSTORE_PATH"
+
+          BUILD_TOOLS_DIR="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+          ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
+          test -x "$APKSIGNER"
+          test -x "$ZIPALIGN"
+
+          APK_DIR="app/build/outputs/apk/release"
+          UNIVERSAL_SOURCE=""
+          ARM64_SOURCE=""
+          while IFS= read -r apk; do
+            case "$apk" in
+              *arm64-v8a*) ARM64_SOURCE="$apk" ;;
+              *universal*) UNIVERSAL_SOURCE="$apk" ;;
+            esac
+          done < <(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' | sort)
+
+          if [[ -z "$UNIVERSAL_SOURCE" || -z "$ARM64_SOURCE" ]]; then
+            echo "Expected universal and arm64-v8a APKs in $APK_DIR" >&2
+            find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' -print >&2
+            exit 1
+          fi
+
+          VERSION="${{ steps.prepare.outputs.version }}"
+          for kind in universal arm64; do
+            if [[ "$kind" == "universal" ]]; then
+              source_apk="$UNIVERSAL_SOURCE"
+              output_apk="$ASSET_DIR/Kami-v$VERSION.apk"
+            else
+              source_apk="$ARM64_SOURCE"
+              output_apk="$ASSET_DIR/Kami-v$VERSION-arm64.apk"
+            fi
+            aligned_apk="$RUNNER_TEMP/aligned-$kind.apk"
+            "$ZIPALIGN" -f -p 4 "$source_apk" "$aligned_apk"
+            "$APKSIGNER" sign \
+              --ks "$KEYSTORE_PATH" \
+              --ks-key-alias "$KAMI_KEY_ALIAS" \
+              --ks-pass env:KAMI_STORE_PASSWORD \
+              --key-pass env:KAMI_KEY_PASSWORD \
+              --out "$output_apk" "$aligned_apk"
+            "$APKSIGNER" verify --verbose "$output_apk"
+            rm -f "$aligned_apk"
+          done
+
+      - name: Publish GitHub Release
+        if: steps.signing.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.prepare.outputs.version }}
+          TAG: ${{ steps.prepare.outputs.tag }}
+          ASSET_DIR: ${{ runner.temp }}/kami-release-assets
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              "$ASSET_DIR/Kami-v$VERSION.apk" \
+              "$ASSET_DIR/Kami-v$VERSION-arm64.apk" \
+              --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" \
+              "$ASSET_DIR/Kami-v$VERSION.apk" \
+              "$ASSET_DIR/Kami-v$VERSION-arm64.apk" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Kami $VERSION" \
+              --notes "Built from main commit $GITHUB_SHA after upstream sync." \
+              --target "$GITHUB_SHA"
+          fi
