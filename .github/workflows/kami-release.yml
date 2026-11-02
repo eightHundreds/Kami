@@ -38,6 +38,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: true
+          fetch-depth: 0
 
       - name: Find unreleased upstream version
         if: steps.signing.outputs.configured == 'true'
@@ -46,8 +47,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="$(curl -fsSL https://api.github.com/repos/wangzan101/Mika/releases/latest | jq -r .tag_name)"
+          release="$(curl -fsSL https://api.github.com/repos/wangzan101/Mika/releases/latest)"
+          tag="$(jq -r .tag_name <<<"$release")"
+          body="$(jq -r .body <<<"$release")"
           if [[ -z "$tag" || "$tag" == "null" ]]; then echo "Upstream has no stable release" >&2; exit 1; fi
+          delimiter="kami_notes_$(openssl rand -hex 12)"
+          { echo "body<<$delimiter"; printf '%s\\n' "$body"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
           released=false
           while IFS= read -r existing; do
             if [[ "$existing" == "$tag" || "$existing" == "$tag."* ]]; then released=true; break; fi
@@ -130,7 +135,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.prepare.outputs.version }}
           TAG: ${{ steps.upstream.outputs.tag }}
+          BODY: ${{ steps.upstream.outputs.body }}
           SHA: ${{ steps.source.outputs.sha }}
           ASSETS: ${{ runner.temp }}/kami-release-assets
         run: |
-          gh release create "$TAG" "$ASSETS/Kami-v$VERSION.apk" "$ASSETS/Kami-v$VERSION-arm64.apk" --repo "$GITHUB_REPOSITORY" --title "Kami $VERSION" --notes "Built from upstream Mika release $TAG." --target "$SHA"
+          gh release create "$TAG" "$ASSETS/Kami-v$VERSION.apk" "$ASSETS/Kami-v$VERSION-arm64.apk" --repo "$GITHUB_REPOSITORY" --title "Kami $VERSION" --notes "$BODY" --target "$SHA"
