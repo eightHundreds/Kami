@@ -16,15 +16,15 @@ def replace_pattern_once(text, pattern, replacement, label):
 def main():
     run_number = int(os.environ["GITHUB_RUN_NUMBER"]); run_attempt = int(os.environ["GITHUB_RUN_ATTEMPT"])
     build_file = ROOT / "app/build.gradle.kts"; gradle = build_file.read_text(encoding="utf-8")
-    code_pattern = r"^(\\s*versionCode\\s*=\\s*)(\\d+)(\\s*)$"
-    name_pattern = r'^(\\s*versionName\\s*=\\s*)"([^"]+)"(\\s*)$'
+    code_pattern = r"^(\s*versionCode\s*=\s*)(\d+)(\s*)$"
+    name_pattern = r'^(\s*versionName\s*=\s*)"([^"]+)"(\s*)$'
     code = re.search(code_pattern, gradle, re.MULTILINE); name = re.search(name_pattern, gradle, re.MULTILINE)
     if not code or not name: raise SystemExit("Could not identify upstream versionCode/versionName")
     upstream_version = name.group(2); tag = os.environ["KAMI_RELEASE_TAG"]
     version = tag.lstrip("vV")
-    if not re.fullmatch(r"\\d+(?:\\.\\d+)*", version): raise SystemExit(f"Unsupported release tag: {tag}")
+    if not re.fullmatch(r"\d+(?:\.\d+)*", version): raise SystemExit(f"Unsupported release tag: {tag}")
     version_code = max(int(code.group(2)), 1_000_000) + run_number * 1_000 + run_attempt
-    gradle = replace_pattern_once(gradle, r'^(\\s*applicationId\\s*=\\s*)"[^"]+"(\\s*)$', lambda m:f'{m.group(1)}"{APP_ID}"{m.group(2)}', "applicationId")
+    gradle = replace_pattern_once(gradle, r'^(\s*applicationId\s*=\s*)"[^"]+"(\s*)$', lambda m:f'{m.group(1)}"{APP_ID}"{m.group(2)}', "applicationId")
     gradle = replace_pattern_once(gradle, code_pattern, lambda m:f"{m.group(1)}{version_code}{m.group(3)}", "versionCode")
     gradle = replace_pattern_once(gradle, name_pattern, lambda m:f'{m.group(1)}"{version}"{m.group(3)}', "versionName")
     gradle = replace_once(gradle, 'resValue("string", "app_name", "Mika Dev")', 'resValue("string", "app_name", "Kami Dev")', "development app label")
@@ -33,7 +33,7 @@ def main():
     if default not in files: raise SystemExit("Default app strings were not found")
     for path in files:
         text = path.read_text(encoding="utf-8")
-        if path == default: text = replace_pattern_once(text, r'^(\\s*<string name="app_name"[^>]*>)[^<]*(</string>\\s*)$', r"\\1Kami\\2", "app_name")
+        if path == default: text = replace_pattern_once(text, r'^(\s*<string name="app_name"[^>]*>)[^<]*(</string>\s*)$', r"\1Kami\2", "app_name")
         path.write_text(text.replace("Mika", "Kami"), encoding="utf-8")
     links_path = ROOT / "app/src/main/java/com/wangzan101/mika/about/MikaLinks.kt"; links = links_path.read_text(encoding="utf-8")
     for old,new,label in [
@@ -47,6 +47,6 @@ def main():
         p=ROOT/"app/src/main/java/com/wangzan101/mika"/rel; p.write_text(replace_once(p.read_text(encoding="utf-8"),old,new,label),encoding="utf-8")
     output=os.environ.get("GITHUB_OUTPUT")
     if output:
-      with open(output,"a",encoding="utf-8") as f: f.write(f"version={version}\\nversion_code={version_code}\\ntag={tag}\\n")
+      with open(output,"a",encoding="utf-8") as f: f.write(f"version={version}\nversion_code={version_code}\ntag={tag}\n")
     print(f"Prepared Kami {version} ({APP_ID}, versionCode {version_code}).")
 if __name__ == "__main__": main()
