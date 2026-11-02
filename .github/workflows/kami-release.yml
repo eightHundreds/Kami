@@ -48,9 +48,13 @@ jobs:
           set -euo pipefail
           tag="$(curl -fsSL https://api.github.com/repos/wangzan101/Mika/releases/latest | jq -r .tag_name)"
           if [[ -z "$tag" || "$tag" == "null" ]]; then echo "Upstream has no stable release" >&2; exit 1; fi
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          released=false
+          while IFS= read -r existing; do
+            if [[ "$existing" == "$tag" || "$existing" == "$tag."* ]]; then released=true; break; fi
+          done < <(gh release list --repo "$GITHUB_REPOSITORY" --json tagName --jq '.[].tagName')
+          if [[ "$released" == true ]]; then
             echo "new_release=false" >> "$GITHUB_OUTPUT"
-            echo "Upstream $tag was already released by Kami."
+            echo "Upstream $tag is already represented by a Kami release."
           else
             echo "new_release=true" >> "$GITHUB_OUTPUT"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
