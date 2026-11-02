@@ -52,7 +52,7 @@ jobs:
           body="$(jq -r .body <<<"$release")"
           if [[ -z "$tag" || "$tag" == "null" ]]; then echo "Upstream has no stable release" >&2; exit 1; fi
           delimiter="kami_notes_$(openssl rand -hex 12)"
-          { echo "body<<$delimiter"; printf '%s\\n' "$body"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
+          { echo "body<<$delimiter"; printf '%s\n' "$body"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
           released=false
           while IFS= read -r existing; do
             if [[ "$existing" == "$tag" || "$existing" == "$tag."* ]]; then released=true; break; fi
