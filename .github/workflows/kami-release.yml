@@ -79,15 +79,20 @@ jobs:
           git remote add upstream https://github.com/wangzan101/Mika.git
           git fetch upstream main --tags
           git checkout main
-          base_sha="$(git rev-parse HEAD)"
-          # Preserve Kami's Actions files; GITHUB_TOKEN cannot push changes under .github/workflows.
-          git merge --no-ff --no-commit upstream/main
-          git restore --source="$base_sha" --staged --worktree -- .github/workflows
-          git commit -m "Merge upstream/main while preserving Kami workflows"
-          git push origin HEAD:main
+          if ! git merge-base --is-ancestor upstream/main HEAD; then
+            base_sha="$(git rev-parse HEAD)"
+            # Preserve Kami's Actions files; GITHUB_TOKEN cannot push changes under .github/workflows.
+            git merge --no-ff --no-commit upstream/main
+            git restore --source="$base_sha" --staged --worktree -- .github/workflows
+            git commit -m "Merge upstream/main while preserving Kami workflows"
+            git push origin HEAD:main
+          else
+            echo "Upstream main is already synced."
+          fi
+          kami_sha="$(git rev-parse HEAD)"
           upstream_sha="$(git rev-parse "refs/tags/$TAG^{commit}")"
           git checkout --detach "$upstream_sha"
-          echo "sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "sha=$kami_sha" >> "$GITHUB_OUTPUT"
 
       - name: Set up Java
         if: steps.upstream.outputs.new_release == 'true'
